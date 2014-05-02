@@ -1,0 +1,6 @@
+name = FBA List Vocabulary Objects Module
+description = Module to list all the vocabulary objects in alphabetic order
+package = DTC Archive
+version = 6.x-13.1
+core = 6.x
+dependencies[] = fedora_repository
