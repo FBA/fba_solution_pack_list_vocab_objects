@@ -1,0 +1,255 @@
+<?php
+include_once drupal_get_path('module', 'fba_solution_pack_list_vocab_objects') . '/listgeographic.inc';
+include_once drupal_get_path('module', 'fba_solution_pack_list_vocab_objects') . '/listvocab.inc';
+
+/**
+ * @file
+ * Module for listing all objects in the FBA Vocabulary Preferred and
+ * Non-PreferredCollections, in alphabetic order.
+ *
+ * NOTE! http://<server>/dtcarchive.local/admin/settings/fedora_repository
+ *
+ * @author simonfox
+ */
+
+/**
+ * Provide definitions for menu callbacks.
+ *
+ * @return array
+ *   Callback definitions
+ */
+function fba_solution_pack_list_vocab_objects_menu() {
+  $items = array();
+  $items['vocabulary/%'] = array(
+    'title' => 'List all Vocabulary terms',
+    'page arguments' => array(0, 1), //0 is always the url
+    'page callback' => 'fba_solution_pack_list_vocab_objects_with_letter',
+    'access arguments' => array('access fba_solution_pack_list_vocab_objects content'),
+    'type' => MENU_CALLBACK,
+  );
+
+  $items['vocabulary'] = array(
+    'title' => 'List all Vocabulary terms',
+    'page callback' => 'fba_solution_pack_list_vocab_objects_form',
+    'access arguments' => array('access fba_solution_pack_list_vocab_objects content'),
+    'type' => MENU_CALLBACK,
+  );
+
+  $items['geographicterms/%'] = array(
+    'title' => 'List all Geographic terms',
+    'page arguments' => array(0, 1), //0 is always the url
+    'page callback' => 'fba_solution_pack_list_geo_objects_with_letter',
+    'access arguments' => array('access fba_solution_pack_list_vocab_objects content'),
+    'type' => MENU_CALLBACK,
+  );
+
+  $items['geographicterms'] = array(
+    'title' => 'List all Geographic terms',
+    'page callback' => 'fba_solution_pack_list_geo_objects_form',
+    'access arguments' => array('access fba_solution_pack_list_vocab_objects content'),
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+/**
+ * Private function to format the A to Z glossary line.
+ *
+ * Used at the top of both functions above, so placed here to remove duplication
+ *
+ * @return string
+ *   containing html formatted A to Z links
+ */
+function _list_objects_A_to_Z($url, $arrayfromfacetsearch) {
+  global $base_url;
+  $needsnonalpha = FALSE; //part of handling non alphabetic characters
+
+  foreach ($arrayfromfacetsearch as $letter => $numofoccurences) {
+    //Handle A to Z
+    if (in_array($letter, range('a', 'z'))) {
+      if ($numofoccurences > 0) { //no need for a link if there are no terms
+        $alphabet .= '<a href="' . $base_url . '/' . $url . '/' . strtoupper($letter) . '">' . strtoupper($letter) . '</a>&nbsp;&nbsp;';
+      }
+      else {
+        $alphabet .= strtoupper($letter) . '&nbsp;&nbsp;';
+      }
+    }
+    else {
+      //Handle non alphabetic characters
+      if (!$needsnonalpha) {
+        //no non-alphabetic has been found yet
+        if ($numofoccurences > 0) { //no need for a link if there are no terms
+          $needsnonalpha = TRUE;
+        }
+      }
+    }
+  }
+  if ($needsnonalpha) {
+    // one or some non alphanumerics have been found
+    $alphabet .= '<a href="' . $base_url . '/' . $url . '/other">Other</a>&nbsp;&nbsp;';
+  }
+  $css = path_to_theme() . '/style.css';
+  $output = '<p>' . $alphabet . '</p>';
+
+  return $output;
+}
+
+/**
+ * Valid permissions for this module.
+ *
+ * @return array
+ *   An array of valid permissions for the module
+ */
+function fba_solution_pack_list_vocab_objects_perm() {
+  return array('access fba_solution_pack_list_vocab_objects content');
+}
+
+/**
+ * Blatantly ripped from apachesolr_views_query function build.
+ * NB assumes solr is on localhost:8080.
+ *
+ * @param string $queryparam
+ *   to be passed within formatted solr query as 'q'
+ *
+ * @return array
+ *   listing all appropriate results
+ */
+function _perform_solr_search_lvo($queryparam = 'dummy', $fieldstoreturn = '*', $facetfield = '', $rows = 1000000) {
+
+  // TODO: needs tidying.
+  // encode the queryparam?
+
+  $params = array();
+  $params['rows'] = $rows;
+  $params['start'] = 0;
+  $params['indent'] = 'on';
+  $params['q'] = $queryparam;
+  $params['version'] = '2.2';
+  $params['facet.field'] = $facetfield;
+  if ($facetfield) {
+    $params['facet'] = 'true';
+    $params['facet.sort'] = 'index';
+  }
+  $params['fl'] = $fieldstoreturn; // "*";
+  $params['qt'] = "standard";
+  $params['wt'] = "json";
+
+  // Add filters to parameters.
+  if (isset($params['filters'])) {
+    $params['fq'] = $params['filters'];
+  }
+
+  // Add sorting.
+  if (isset($params['sort'])) {
+    // Populate sorting parameters.
+    foreach ($params['sort'] as $field => $order) {
+      $params['sort'][] = $field . ' ' . $order;
+    }
+  }
+
+  // Set query.
+  $dismax = NULL;
+  if (isset($params['q'])) {
+    // Query.
+    $query = $params['q'];
+
+    // Dismax.
+    if (isset($params['defType']) AND $params['defType'] == 'dismax') {
+      $dismax = $params['defType'];
+      // If no qf fields are specified in the requestHandler
+      // a default list is supplied here for dismax searches.
+      $params['qf'] = 'dc.title^5 dc.subject^2 dc.description^2 dc.creator^2 dc.contributor^1 dc.type';
+    }
+  }
+  else {
+    $query = '*:*';
+  }
+
+  $url = variable_get('islandora_solr_search_block_url', 'http://localhost:8080/solr');
+  $pathparts = parse_url($url);
+
+  $solr = new Apache_Solr_Service($pathparts['host'], $pathparts['port'], $pathparts['path'] . '/');
+  $solr->setCreateDocuments(0);
+
+  // This is where the query gets executed and output starts being created.
+  try {
+    $results = $solr->search($query, $params['start'], $params['rows'], $params);
+  } catch (Exception $e) {
+    drupal_set_message(t('_perform_solr_search_lvo :: ') . $e->getMessage());
+  }
+
+  return $results;
+}
+
+function _cmp($a, $b) {
+  if ($a['mads.authority']) {
+    $aTerm = $a['mads.authority'];
+  }
+  else {
+    $aTerm = $a['mads.variant'];
+  }
+  if ($b['mads.authority']) {
+    $bTerm = $b['mads.authority'];
+  }
+  else {
+    $bTerm = $b['mads.variant'];
+  }
+
+  $result = strcasecmp($aTerm, $bTerm);
+
+  return $result;
+}
+
+
+/**
+ *
+ * Provides html page with list of vocab objects for a selected letter
+ *
+ * @return string
+ *   Vocab object list for single initial letter, in alphabetical order
+ */
+function fba_solution_pack_list_objects_with_letter($url, $initial, $collection1, $collection2) {
+
+  module_load_include('inc', 'fedora_repository', 'ObjectHelper');
+  global $base_url;
+  $facetqueryparams = 'rels.isMemberOfCollection:' . $collection1 . ' OR rels.isMemberOfCollection:' . $collection2;
+  $facetresult = _perform_solr_search_lvo($facetqueryparams, '*', 'mads.initials', 0);
+  $facetrawresponse = $facetresult->getRawResponse();
+  $facetresponsearray = json_decode($facetrawresponse, TRUE);
+  $facetresponsedocs = $facetresponsearray['facet_counts']['facet_fields']['mads.initials'];
+  $output = _list_objects_A_to_Z($url, $facetresponsedocs);
+  $output .= '<strong>&nbsp;-&nbsp;' . $initial . '&nbsp;-&nbsp;</strong>';
+
+  if (strcmp($initial, 'other') == 0) {
+    //only need to search for nonalphabetic characters
+    $solrqueryparams = '-mads.initials:[a TO z] AND (rels.isMemberOfCollection:' . $collection1 . ' OR rels.isMemberOfCollection:' . $collection2 . ')';
+  }
+  else {
+    $solrqueryparams = 'mads.initials:' . $initial . ' OR mads.initials:' . strtolower($initial) . ' AND (rels.isMemberOfCollection:' . $collection1 . ' OR rels.isMemberOfCollection:' . $collection2 . ')';
+  }
+
+  $solrresult = _perform_solr_search_lvo($solrqueryparams, 'mads.authority, mads.variant, dc.identifier');
+  $rawresponse = $solrresult->getRawResponse();
+  $responsearray = json_decode($rawresponse, TRUE);
+  $responsedocs = $responsearray['response']['docs'];
+  // As solr can't do it, will have to sort the results here.
+  usort($responsedocs, "_cmp"); //custom sort function for authoritys and variants
+  $output .= '<p>';
+
+  foreach ($responsedocs as $searchresult) {
+    $searchresauth = $searchresult['mads.authority'];
+    $searchresvar = $searchresult['mads.variant'];
+    $searchdcid = $searchresult['dc.identifier'][0];
+    if ($searchresauth) {
+      //it's an authority
+      $output .= '<a href ="' . $base_url . '/fedora/repository/' . $searchdcid . '">' . $searchresauth . '</a><br/>';
+    }
+    else {
+      //it's a variant
+      $output .= '<a href ="' . $base_url . '/fedora/repository/' . $searchdcid . '"><em>' . $searchresvar . '</em></a><br/>';
+    }
+  }
+  $output .= '</p>';
+  return $output;
+}
